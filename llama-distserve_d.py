@@ -1,74 +1,38 @@
-import os
 import time
-import numpy as np
+import copy
+import nvtx
 import torch
-from torch import nn
-import torch.distributed as dist
-from transformers import LlamaConfig
+import argparse
 from modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import DynamicCache
-import copy
-from torch.profiler import profile, record_function, ProfilerActivity
-
-import nvtx
-
-def init_prof(use_profiler):
-    activities = []
-    # activities.append(torch.profiler.ProfilerActivity.CPU)
-    activities.append(torch.profiler.ProfilerActivity.CUDA)
-
-    from contextlib import nullcontext
-
-    ctx = (
-        torch.profiler.profile(
-            activities=activities,
-            schedule=torch.profiler.schedule(wait=0, warmup=2, active=4, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler("./profile/"),
-            record_shapes=True,
-            with_stack=True,
-        )
-        if use_profiler
-        else nullcontext()
-    )
-    return ctx
+from utils import init_prof, get_model_config
 
 
-if __name__ == "__main__":
+def main(
+    batch_size=4,
+    seq_len=2048,
+    num_iterations=50,
+    num_generate_tokens=100,
+    num_warmup_iterations=10,
+    use_profiler=False,
+):
     device = torch.device("cuda:0")
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float16)
 
-    cfg = LlamaConfig()
-    cfg.hidden_size = 4096
-    cfg.intermediate_size = 11008
-    cfg.max_position_embeddings = 4096
-    cfg.num_attention_heads = 32
-    cfg.num_key_value_heads = 32
-    cfg.num_hidden_layers = 1
-    cfg.rms_norm_eps = 1e-05
-    cfg._attn_implementation = "sdpa"
-    cfg.torch_dtype = torch.float16
-
+    cfg = get_model_config()
     model = LlamaForCausalLM(cfg).to(device)
     print(
-        f"After init model, CUDA memory allocated: {torch.cuda.memory_allocated(device) / 1024 ** 3:.2f} GB, reserved: {torch.cuda.memory_reserved(device) / 1024 ** 3:.2f} GB"
+        f"After init model, CUDA memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB, reserved: {torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
     )
 
     # Example input and configuration
-    batch_size = 4
-    seq_len = 2048
     vocab_size = cfg.vocab_size
-
-    use_profiler = False
-    num_iterations = 50
-    num_warmup_iterations = 10
     num_inf_iterations = num_iterations + num_warmup_iterations
-
-    num_generate_tokens = 100
 
     with torch.no_grad():
         print(
-            f"During infer, CUDA memory allocated: {torch.cuda.memory_allocated(device) / 1024 ** 3:.2f} GB, reserved: {torch.cuda.memory_reserved(device) / 1024 ** 3:.2f} GB"
+            f"During infer, CUDA memory allocated: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB, reserved: {torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
         )
 
         ctx = init_prof(use_profiler)
@@ -77,7 +41,9 @@ if __name__ == "__main__":
 
             prefill_input_ids = torch.randint(vocab_size, (batch_size, seq_len))
             prefill_position_ids = (
-                torch.arange(seq_len).unsqueeze(0).expand(prefill_input_ids.shape[0], -1)
+                torch.arange(seq_len)
+                .unsqueeze(0)
+                .expand(prefill_input_ids.shape[0], -1)
             )
             prefill_past_key_values = DynamicCache()
             prefill_logits, prefill_outputs, prefill_past_key_values = model(
@@ -90,15 +56,17 @@ if __name__ == "__main__":
             # Update position_ids
             prefill_next_position_id = prefill_position_ids[:, -1] + 1
             prefill_position_ids = prefill_next_position_id.unsqueeze(1)
+
             # Get the next input token
-            prefill_input_ids = torch.argmax(prefill_logits, dim=2).reshape(batch_size, -1)
+            prefill_input_ids = torch.argmax(prefill_logits, dim=2).reshape(
+                batch_size, -1
+            )
 
             for step in range(num_iterations):
                 if step >= num_warmup_iterations:
                     torch.cuda.synchronize()
                     decode_rng = nvtx.start_range(message="decode", color="blue")
                     start_time = time.time()
-
 
                 prefill_time = 0.0
                 decoding_time = 0.0
@@ -141,7 +109,7 @@ if __name__ == "__main__":
                     input_ids = torch.argmax(logits, dim=2).reshape(batch_size, -1)
 
                 print(
-                    f"step {step} CUDA memory allocated/reserved: {torch.cuda.memory_allocated(device) / 1024 ** 3:.2f}/{torch.cuda.memory_reserved(device) / 1024 ** 3:.2f} GB"
+                    f"step {step} CUDA memory allocated/reserved: {torch.cuda.memory_allocated(device) / 1024**3:.2f}/{torch.cuda.memory_reserved(device) / 1024**3:.2f} GB"
                 )
 
                 if step >= num_warmup_iterations:
@@ -155,3 +123,44 @@ if __name__ == "__main__":
                     prof.step()
 
     print(f"time for local attention: {elapse / num_inf_iterations * 1000:.3f} ms")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--batch_size", type=int, default=4, help="Batch size for inference"
+    )
+    parser.add_argument(
+        "--seq_len", type=int, default=2048, help="Sequence length for inference"
+    )
+    parser.add_argument(
+        "--num_iterations",
+        type=int,
+        default=50,
+        help="Number of iterations for inference",
+    )
+    parser.add_argument(
+        "--num_generate_tokens",
+        type=int,
+        default=100,
+        help="Number of tokens to generate",
+    )
+    parser.add_argument(
+        "--num_warmup_iterations",
+        type=int,
+        default=10,
+        help="Number of warmup iterations",
+    )
+    parser.add_argument(
+        "--use_profiler", action="store_true", default=False, help="Use profiler"
+    )
+    args = parser.parse_args()
+
+    main(
+        batch_size=args.batch_size,
+        seq_len=args.seq_len,
+        num_iterations=args.num_iterations,
+        num_generate_tokens=args.num_generate_tokens,
+        num_warmup_iterations=args.num_warmup_iterations,
+        use_profiler=args.use_profiler,
+    )
