@@ -55,8 +55,8 @@ if __name__ == "__main__":
     )
 
     # Example input and configuration
-    batch_size = 1
-    seq_len = 1024
+    batch_size = 4
+    seq_len = 2048
     vocab_size = cfg.vocab_size
 
     use_profiler = False
