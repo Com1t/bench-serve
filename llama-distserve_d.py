@@ -1,3 +1,4 @@
+import os
 import time
 import copy
 import nvtx
@@ -15,10 +16,14 @@ def main(
     num_generate_tokens=100,
     num_warmup_iterations=10,
     use_profiler=False,
+    mps_pct=100,
 ):
     device = torch.device("cuda:0")
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float16)
+
+    os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(mps_pct)
+    print(f"[RANK Prefill] Set MPS to {mps_pct}%")
 
     cfg = get_model_config()
     model = LlamaForCausalLM(cfg).to(device)
@@ -95,11 +100,8 @@ def main(
                         itr_elapse_time = itr_end_time - itr_start_time
                         if i_tk == 0:
                             prefill_time = itr_elapse_time
-                            print(prefill_time)
                         else:
                             decoding_time += itr_elapse_time
-                        # if i_tk % 50 == 0:
-                        #     print(itr_elapse_time)
 
                     # Update position_ids
                     next_position_id = position_ids[:, -1] + 1
@@ -131,7 +133,7 @@ if __name__ == "__main__":
         "--batch_size", type=int, default=4, help="Batch size for inference"
     )
     parser.add_argument(
-        "--seq_len", type=int, default=2048, help="Sequence length for inference"
+        "--seq_len", type=int, default=2048, help="Sequence length for prefill"
     )
     parser.add_argument(
         "--num_iterations",
@@ -154,6 +156,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_profiler", action="store_true", default=False, help="Use profiler"
     )
+    parser.add_argument(
+        "--mps_pct",
+        type=int,
+        default=100,
+        help="Percentage of MPS threads to use (0-100)",
+    )
     args = parser.parse_args()
 
     main(
@@ -163,4 +171,5 @@ if __name__ == "__main__":
         num_generate_tokens=args.num_generate_tokens,
         num_warmup_iterations=args.num_warmup_iterations,
         use_profiler=args.use_profiler,
+        mps_pct=args.mps_pct,
     )

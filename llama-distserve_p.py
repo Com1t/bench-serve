@@ -1,3 +1,4 @@
+import os
 import time
 import nvtx
 import torch
@@ -6,17 +7,20 @@ from modeling_llama import LlamaForCausalLM
 from transformers.cache_utils import DynamicCache
 from utils import init_prof, get_model_config
 
-
 def main(
     batch_size=4,
     seq_len=2048,
     num_iterations=50,
     num_warmup_iterations=10,
     use_profiler=False,
+    mps_pct=100,
 ):
     device = torch.device("cuda:0")
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float16)
+
+    os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(mps_pct)
+    print(f"[RANK Prefill] Set MPS to {mps_pct}%")
 
     cfg = get_model_config()
     model = LlamaForCausalLM(cfg).to(device)
@@ -126,6 +130,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Use profiler for performance analysis",
     )
+    parser.add_argument(
+        "--mps_pct",
+        type=int,
+        default=100,
+        help="Percentage of MPS threads to use (0-100)",
+    )
     args = parser.parse_args()
 
     main(
@@ -134,4 +144,5 @@ if __name__ == "__main__":
         num_iterations=args.num_iterations,
         num_warmup_iterations=args.num_warmup_iterations,
         use_profiler=args.use_profiler,
+        mps_pct=args.mps_pct,
     )
