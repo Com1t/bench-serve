@@ -16,14 +16,15 @@ def main(
     num_generate_tokens=100,
     num_warmup_iterations=10,
     use_profiler=False,
-    mps_pct=100,
+    mps_pct=None,
 ):
     device = torch.device("cuda:0")
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float16)
 
-    os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(mps_pct)
-    print(f"[RANK Prefill] Set MPS to {mps_pct}%")
+    if mps_pct is not None:
+        os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(mps_pct)
+        print(f"[RANK Prefill] Set MPS to {mps_pct}%")
 
     cfg = get_model_config()
     model = LlamaForCausalLM(cfg).to(device)
@@ -159,8 +160,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mps_pct",
         type=int,
-        default=100,
-        help="Percentage of MPS threads to use (0-100)",
+        default=None,
+        help="Percentage of MPS threads to use (0-100). Optional.",
     )
     args = parser.parse_args()
 
